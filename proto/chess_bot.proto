@@ -1,0 +1,23 @@
+syntax = "proto3";
+
+package chess_bot;
+
+service ChessBot {
+  rpc GetBestMove (PositionRequest) returns (MoveResponse);
+}
+
+message PositionRequest {
+  string fen = 1;
+  int32 elo_rating = 2;  
+}
+
+message MoveResponse {
+  string best_move = 1;      // UCI format (e2e4)
+  int32 score = 2;
+  string from = 3;           // e2
+  string to = 4;             // e4
+  string piece = 5;          // Pawn, Knight, etc
+  optional string captured = 6;
+  optional string promotion = 7;
+  string san = 8;            // e4, Nf3, etc
+}
