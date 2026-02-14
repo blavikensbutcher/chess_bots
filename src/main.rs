@@ -34,8 +34,7 @@ impl ChessBot for ChessBotService {
             &req.fen[..30],
             req.elo_rating
         );
-
-        // Отримуємо Stockfish з pool
+        
         let mut stockfish = self.pool.get().await.map_err(|e| {
             eprintln!("❌ Failed to get Stockfish from pool: {}", e);
             Status::internal("Pool exhausted")
@@ -48,24 +47,20 @@ impl ChessBot for ChessBotService {
 
         println!("🎯 Skill level: {}, depth: {}", skill_level, depth);
 
-        // Виконуємо всі Stockfish операції в одному spawn_blocking
+    
         let fen = req.fen.clone();
         let result = tokio::task::spawn_blocking(move || {
-            // Налаштування skill level
+            // Skill level setup
             stockfish
                 .uci_send(&format!("setoption name Skill Level value {}", skill_level))
                 .map_err(|e| format!("Skill setup error: {}", e))?;
 
-            stockfish
-                .uci_send("setoption name MultiPV value 1")
-                .map_err(|e| format!("MultiPV error: {}", e))?;
-
-            // Встановлення позиції
+            // Position setup
             stockfish
                 .set_fen_position(&fen)
                 .map_err(|e| format!("Invalid FEN: {}", e))?;
 
-            // Обчислення
+            // Calculating best move
             stockfish.set_depth(depth as u32);
             let engine_result = stockfish.go().map_err(|e| format!("Engine error: {}", e))?;
 
@@ -79,7 +74,6 @@ impl ChessBot for ChessBotService {
 
         let uci_move_str = result.best_move().to_string();
 
-        // Парсинг FEN і створення move
         let fen: Fen = req
             .fen
             .parse()
