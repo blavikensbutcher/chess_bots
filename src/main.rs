@@ -1,14 +1,13 @@
 use deadpool::managed::Pool;
 use dotenv::dotenv;
-use rand::prelude::IndexedRandom; // Оновлений імпорт для rand v0.10.0
-use rand::RngExt;
 use shakmaty::fen::Fen;
-use shakmaty::{san::San, uci::UciMove, Chess, Position};
+use shakmaty::{san::San, uci::UciMove, Chess};
 use std::net::SocketAddr;
 use tonic::{transport::Server, Request, Response, Status};
 
 mod config;
 mod stockfish_manager;
+
 use config::Config;
 use stockfish_manager::StockfishManager;
 
@@ -26,16 +25,7 @@ pub struct ChessBotService {
 
 fn extract_move_details(
     chess_move: &shakmaty::Move,
-) -> Result<
-    (
-        String,
-        String,
-        String,
-        Option<String>,
-        Option<String>,
-    ),
-    Status,
-> {
+) -> Result<(String, String, String, Option<String>, Option<String>), Status> {
     match chess_move {
         shakmaty::Move::Normal {
             role,
@@ -80,51 +70,37 @@ fn extract_move_details(
             Some("Pawn".to_string()),
             None,
         )),
-        shakmaty::Move::Put { .. } => {
-            Err(Status::internal("Put move not supported"))
-        }
+        shakmaty::Move::Put { .. } => Err(Status::internal("Put move not supported")),
     }
 }
 
 fn calculate_skill_from_elo(elo: i32) -> i32 {
     match elo {
-        ..=1199 => 0,      // Minimum skill for < 1200
-        1200..=1349 => 1,
-        1350..=1549 => 2,
-        1550..=1649 => 3,
-        1650..=1749 => 4,
-        1750..=1849 => 5,
-        1850..=1949 => 6,
-        1950..=2049 => 8,
-        2050..=2149 => 10,
-        2150..=2249 => 12,
-        2250..=2349 => 14,
-        2350..=2449 => 16,
-        2450..=2549 => 17,
-        2550..=2649 => 18,
-        2650..=2749 => 19,
-        _ => 20,           // Max skill level for Stockfish is 20
+        ..=499 => -12,
+        500..=799 => -9,
+        800..=1099 => -5,
+        1100..=1399 => -1,
+        1400..=1699 => 3,
+        1700..=1999 => 7,
+        2000..=2299 => 11,
+        2300..=2599 => 15,
+        _ => 20,
     }
 }
 
 fn calculate_depth_from_elo(elo: i32) -> u8 {
     match elo {
-        ..=1999 => 5,  
-        2000..=2199 => 6,
-        2200..=2399 => 8,   // Lichess Level 6 = depth 8
-        2400..=2599 => 10,
-        2600..=2799 => 13,  // Lichess Level 7 = depth 13
-        _ => 22,            // Lichess Level 8 = depth 22
+        ..=1999 => 5,
+        2000..=2299 => 8,
+        2300..=2599 => 13,
+        _ => 22,
     }
 }
 
-fn calculate_blunder_chance(elo: i32) -> f64 {
+fn calculate_multipv_from_elo(elo: i32) -> u8 {
     match elo {
-        ..=600 => 0.40,   // 40% chance of a random move
-        601..=800 => 0.35,
-        801..=1000 => 0.25,
-        1001..=1199 => 0.15,
-        _ => 0.0,
+        ..=2599 => 4,
+        _ => 1,
     }
 }
 
@@ -136,59 +112,13 @@ impl ChessBot for ChessBotService {
     ) -> Result<Response<MoveResponse>, Status> {
         let req = request.into_inner();
 
+        let fen_preview: String = req.fen.chars().take(30).collect();
         println!(
             "📥 Received request: FEN={}, ELO={}",
-            &req.fen[..30],
+            fen_preview,
             req.elo_rating
         );
 
-        // 1. Parse FEN and create position first
-        let fen: Fen = req
-            .fen
-            .parse()
-            .map_err(|e| Status::invalid_argument(format!("Invalid FEN: {:?}", e)))?;
-
-        let pos: Chess = fen
-            .clone()
-            .into_position(shakmaty::CastlingMode::Standard)
-            .map_err(|e| Status::invalid_argument(format!("Invalid position: {:?}", e)))?;
-
-        // 2. Intentional blunder logic for low ELO
-        if req.elo_rating < 1200 {
-            let blunder_chance = calculate_blunder_chance(req.elo_rating);
-            
-            let mut rng = rand::rng();
-
-            if rng.random_bool(blunder_chance) {
-                println!("🎲 Making a random blunder move for ELO {}", req.elo_rating);
-
-                let legal_moves = pos.legal_moves();
-                if let Some(random_move) = legal_moves.choose(&mut rng) {
-                    
-
-                    let san = San::from_move(&pos, random_move.clone()).to_string();
-                    let uci_move_str = random_move.to_uci(shakmaty::CastlingMode::Standard).to_string();
-
-
-                    let (from, to, piece, captured, promotion) = extract_move_details(&random_move)?;
-
-                    println!("📤 Sending random blunder response: {}", san);
-
-                    return Ok(Response::new(MoveResponse {
-                        best_move: uci_move_str,
-                        score: -9999, // Fake score indicating a bad/random move
-                        from,
-                        to,
-                        piece,
-                        captured,
-                        promotion,
-                        san,
-                    }));
-                }
-            }
-        }
-
-        // 3. Fallback to Stockfish
         let mut stockfish = self.pool.get().await.map_err(|e| {
             eprintln!("❌ Failed to get Stockfish from pool: {}", e);
             Status::internal("Pool exhausted")
@@ -198,24 +128,36 @@ impl ChessBot for ChessBotService {
 
         let skill_level = calculate_skill_from_elo(req.elo_rating);
         let depth = calculate_depth_from_elo(req.elo_rating);
+        let multipv = calculate_multipv_from_elo(req.elo_rating);
 
-        println!("🎯 Skill level: {}, depth: {}", skill_level, depth);
+        println!(
+            "🎯 Skill level: {}, depth: {}, multipv: {}",
+            skill_level, depth, multipv
+        );
 
         let fen_str = req.fen.clone();
         let result = tokio::task::spawn_blocking(move || {
-            // Skill level setup
+            stockfish
+                .uci_send("setoption name UCI_Variant value chess")
+                .map_err(|e| format!("Variant setup error: {}", e))?;
+
+            stockfish
+                .uci_send(&format!("setoption name MultiPV value {}", multipv))
+                .map_err(|e| format!("MultiPV setup error: {}", e))?;
+
             stockfish
                 .uci_send(&format!("setoption name Skill Level value {}", skill_level))
                 .map_err(|e| format!("Skill setup error: {}", e))?;
 
-            // Position setup
             stockfish
                 .set_fen_position(&fen_str)
                 .map_err(|e| format!("Invalid FEN: {}", e))?;
 
-            // Calculating best move
             stockfish.set_depth(depth as u32);
-            let engine_result = stockfish.go().map_err(|e| format!("Engine error: {}", e))?;
+
+            let engine_result = stockfish
+                .go()
+                .map_err(|e| format!("Engine error: {}", e))?;
 
             Ok::<_, String>(engine_result)
         })
@@ -226,17 +168,24 @@ impl ChessBot for ChessBotService {
         let uci_move_str = result.best_move().to_string();
         println!("✅ Got best move from engine: {}", uci_move_str);
 
+        let fen: Fen = req
+            .fen
+            .parse()
+            .map_err(|e| Status::invalid_argument(format!("Invalid FEN: {:?}", e)))?;
+
+        let pos: Chess = fen
+            .into_position(shakmaty::CastlingMode::Standard)
+            .map_err(|e| Status::invalid_argument(format!("Invalid position: {:?}", e)))?;
+
         let uci_move: UciMove = uci_move_str
             .parse()
-            .map_err(|e| Status::internal(format!("Invalid UCI move from engine: {:?}", e)))?;
+            .map_err(|e| Status::internal(format!("Invalid UCI move: {:?}", e)))?;
 
         let chess_move = uci_move
             .to_move(&pos)
-            .map_err(|e| Status::internal(format!("Illegal move from engine: {:?}", e)))?;
+            .map_err(|e| Status::internal(format!("Illegal move: {:?}", e)))?;
 
         let (from, to, piece, captured, promotion) = extract_move_details(&chess_move)?;
-        
-        // Віддаємо клон ходу до San::from_move
         let san = San::from_move(&pos, chess_move.clone()).to_string();
 
         println!("📤 Sending response: {}", san);
@@ -261,8 +210,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     dotenv().ok();
     let config = Config::from_env().expect("Failed to load configuration");
 
-    let stockfish_path =
-        std::env::var("STOCKFISH_PATH").unwrap_or_else(|_| "/usr/games/stockfish".to_string());
+    let stockfish_path = std::env::var("STOCKFISH_PATH")
+        .unwrap_or_else(|_| "/usr/games/fairy-stockfish".to_string());
 
     println!("🔧 Creating Stockfish pool...");
 
