@@ -25,4 +25,6 @@ COPY --from=builder /app/target/release/chess-bots /app/chess-bots
 
 EXPOSE 50051
 
+ENV STOCKFISH_PATH=/usr/games/fairy-stockfish
+
 CMD ["/app/chess-bots"]

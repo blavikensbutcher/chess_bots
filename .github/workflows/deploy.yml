@@ -41,8 +41,9 @@ jobs:
             docker run -d \
               --name chess-bots \
               --restart unless-stopped \
+              --log-driver json-file \
               -p 50051:50051 \
-              -e STOCKFISH_PATH=/usr/games/stockfish \
+              -e STOCKFISH_PATH=/usr/games/fairy-stockfish \
               chess-bots:latest
             
             # Cleanup
