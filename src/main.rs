@@ -175,7 +175,7 @@ impl ChessBot for ChessBotService {
 
         let pos: Chess = fen
             .into_position(shakmaty::CastlingMode::Standard)
-            .map_err(|e| Status::invalid_argument(format!("Invalid position: {:?}", e)))?;
+            .map_err(|e| Status::invalid_argument(format!("Invalid position {:?}", e)))?;
 
         let uci_move: UciMove = uci_move_str
             .parse()
