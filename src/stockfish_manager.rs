@@ -21,16 +21,19 @@ impl Manager for StockfishManager {
         let path = self.path.clone();
 
         async move {
-            tokio::task::spawn_blocking(move || {
+            let mut engine = tokio::task::spawn_blocking(move || {
                 Stockfish::new(&path).map_err(|e| {
-                    io::Error::new(
-                        io::ErrorKind::Other,
-                        format!("Failed to create Stockfish: {}", e),
-                    )
+                    io::Error::other(format!("Failed to create Stockfish: {}", e))
                 })
             })
             .await
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Spawn error: {}", e)))?
+            .map_err(|e| io::Error::other(format!("Spawn error: {}", e)))??;
+
+            engine
+                .uci_send("setoption name UCI_Variant value chess")
+                .map_err(|e| io::Error::other(format!("UCI_Variant setup error: {}", e)))?;
+
+            Ok(engine)
         }
     }
 
@@ -40,9 +43,11 @@ impl Manager for StockfishManager {
         _metrics: &Metrics,
     ) -> impl Future<Output = RecycleResult<Self::Error>> + Send {
         async move {
-            obj.setup_for_new_game().map_err(|e| {
-                io::Error::new(io::ErrorKind::Other, format!("Recycle error: {}", e))
-            })?;
+            obj.setup_for_new_game()
+                .map_err(|e| io::Error::other(format!("Recycle error: {}", e)))?;
+
+            obj.uci_send("setoption name UCI_Variant value chess")
+                .map_err(|e| io::Error::other(format!("UCI_Variant recycle error: {}", e)))?;
 
             Ok(())
         }
