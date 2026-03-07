@@ -1,7 +1,7 @@
-use stockfish::Stockfish;
 use deadpool::managed::{Manager, Metrics, RecycleResult};
-use std::io;
 use std::future::Future;
+use std::io;
+use stockfish::Stockfish;
 
 pub struct StockfishManager {
     path: String,
@@ -19,11 +19,14 @@ impl Manager for StockfishManager {
 
     fn create(&self) -> impl Future<Output = Result<Self::Type, Self::Error>> + Send {
         let path = self.path.clone();
-        
+
         async move {
             tokio::task::spawn_blocking(move || {
                 Stockfish::new(&path).map_err(|e| {
-                    io::Error::new(io::ErrorKind::Other, format!("Failed to create Stockfish: {}", e))
+                    io::Error::new(
+                        io::ErrorKind::Other,
+                        format!("Failed to create Stockfish: {}", e),
+                    )
                 })
             })
             .await
@@ -37,9 +40,10 @@ impl Manager for StockfishManager {
         _metrics: &Metrics,
     ) -> impl Future<Output = RecycleResult<Self::Error>> + Send {
         async move {
-            obj.setup_for_new_game()
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Recycle error: {}", e)))?;
-            
+            obj.setup_for_new_game().map_err(|e| {
+                io::Error::new(io::ErrorKind::Other, format!("Recycle error: {}", e))
+            })?;
+
             Ok(())
         }
     }
