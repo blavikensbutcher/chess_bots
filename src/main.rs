@@ -36,7 +36,15 @@ fn extract_move_details(
         } => {
             let piece_name = format!("{:?}", role);
             let captured_name = capture.map(|c| format!("{:?}", c));
-            let promotion_name = promotion.map(|p| format!("{:?}", p));
+            
+            // Map the promotion role to standard lowercase characters
+            let promotion_name = promotion.map(|p| match p {
+                shakmaty::Role::Queen => "q",
+                shakmaty::Role::Rook => "r",
+                shakmaty::Role::Bishop => "b",
+                shakmaty::Role::Knight => "n",
+                _ => "q",
+            }.to_string());
 
             Ok((
                 from.to_string(),
