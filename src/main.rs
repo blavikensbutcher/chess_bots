@@ -242,6 +242,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or_else(|_| "/usr/games/fairy-stockfish".to_string());
 
     println!("🔧 Creating Stockfish pool...");
+    println!("🔧 Creating Stockfish pool...");
 
     let manager = StockfishManager::new(stockfish_path);
     let pool = Pool::builder(manager)
